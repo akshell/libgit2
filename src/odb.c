@@ -64,6 +64,10 @@ struct git_pack {
 
 	/** Name of the pack file(s), without extension ("pack-abc"). */
 	char pack_name[GIT_PACK_NAME_MAX];
+
+	/** The .pack file, mapped into memory. */
+	git_file pack_fd;
+	git_map pack_map;
 };
 typedef struct git_pack git_pack;
 
@@ -809,6 +813,59 @@ unlock_fail:
 	return GIT_ERROR;
 }
 
+static int pack_openpack_map(git_pack *p)
+{
+	char pb[GIT_PATH_MAX];
+	off_t len;
+
+	if (git__fmt(pb, sizeof(pb), "%s/pack/%s.pack",
+			p->db->objects_dir,
+			p->pack_name) < 0)
+		return GIT_ERROR;
+
+	if ((p->pack_fd = gitfo_open(pb, O_RDONLY)) < 0)
+		return GIT_ERROR;
+
+	if ((len = gitfo_size(p->pack_fd)) < 0
+			|| !git__is_sizet(len)
+			|| gitfo_map_ro(&p->pack_map, p->pack_fd, 0, (size_t)len)) {
+		gitfo_close(p->pack_fd);
+		return GIT_ERROR;
+	}
+
+	return GIT_SUCCESS;
+}
+
+static int pack_openpack(git_pack *p)
+{
+	gitlck_lock(&p->lock);
+	if (p->invalid)
+		goto unlock_fail;
+	if (p->pack_fd < 0) {
+		uint32_t *data;
+
+		if (pack_openpack_map(p))
+			goto invalid_fail;
+		data = p->pack_map.data;
+
+		if (decode32(&data[0]) != PACK_HDR)
+			goto unmap_fail;
+	}
+	gitlck_unlock(&p->lock);
+	return GIT_SUCCESS;
+
+unmap_fail:
+	gitfo_free_map(&p->pack_map);
+
+invalid_fail:
+	p->invalid = 1;
+	p->pack_fd = -1;
+
+unlock_fail:
+	gitlck_unlock(&p->lock);
+	return GIT_ERROR;
+}
+
 static void pack_decidx(git_pack *p)
 {
 	gitlck_lock(&p->lock);
@@ -829,6 +886,11 @@ static void pack_dec(git_pack *p)
 			gitfo_free_map(&p->idx_map);
 			gitfo_close(p->idx_fd);
 			free(p->im_fanout);
+		}
+		if (p->pack_fd >= 0) {
+			gitfo_free_map(&p->pack_map);
+			gitfo_close(p->pack_fd);
+			p->pack_fd = -1;
 		}
 
 		gitlck_free(&p->lock);
@@ -861,6 +923,7 @@ static git_pack *alloc_pack(const char *pack_name)
 	gitlck_init(&p->lock);
 	strcpy(p->pack_name, pack_name);
 	p->refcnt = 1;
+	p->pack_fd = -1;
 	return p;
 }
 
@@ -895,7 +958,7 @@ static int scan_one_pack(void *state, char *name)
 
 	r->next = *ret;
 	*ret = r;
-	return 0;
+	return GIT_SUCCESS;
 }
 
 static git_packlist* scan_packs(git_odb *db)

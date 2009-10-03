@@ -15,5 +15,6 @@
  * cannot be true for an idx v1 file.
  */
 #define PACK_TOC 0xff744f63 /* -1tOc */
+#define PACK_HDR 0x5041434b /* PACK */
 
 #endif
