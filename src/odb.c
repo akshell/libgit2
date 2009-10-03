@@ -97,8 +97,10 @@ struct git_odb {
 };
 
 typedef struct {  /* object header data */
-	git_otype type;  /* object type */
-	size_t    size;  /* object size */
+	git_otype type;         /* object type */
+	size_t    size;         /* object size */
+	off_t     base_offset;  /* delta base offset (GIT_OBJ_OFS_DELTA) */
+	git_oid   base_name;    /* delta base name (GIT_OBJ_REF_DELTA) */
 } obj_hdr;
 
 static struct {
@@ -238,6 +240,7 @@ static size_t get_binary_object_header(obj_hdr *hdr, gitfo_buf *obj)
 	unsigned char c;
 	unsigned char *data = obj->data;
 	size_t shift, size, used = 0;
+	off_t base_offset;
 
 	if (obj->len == 0)
 		return 0;
@@ -257,6 +260,27 @@ static size_t get_binary_object_header(obj_hdr *hdr, gitfo_buf *obj)
 		shift += 7;
 	}
 	hdr->size = size;
+
+	hdr->base_offset = 0;
+	hdr->base_name.id[0] = '\0';
+
+	if (hdr->type == GIT_OBJ_OFS_DELTA) {
+		c = data[used++];
+		base_offset = c & 127;
+		while (c & 128) {
+			base_offset++;
+			if (!base_offset || MSB(base_offset, 7))
+				return 0;  /* overflow */
+			c = data[used++];
+			base_offset = (base_offset << 7) + (c & 127);
+		}
+		assert(base_offset > 0);
+		hdr->base_offset = base_offset;
+	}
+	else if (hdr->type == GIT_OBJ_REF_DELTA) {
+		git_oid_mkraw(&hdr->base_name, data + used);
+		used += 20;
+	}
 
 	return used;
 }

@@ -30,6 +30,9 @@
 # define GIT_TYPEOF(x)
 #endif
 
+#define bitsizeof(x)  (CHAR_BIT * sizeof(x))
+#define MSB(x, bits) ((x) & GIT_TYPEOF(x)(~0ULL << (bitsizeof(x) - (bits))))
+
 /*
  * Does our compiler/platform support the C99 <inttypes.h> and
  * <stdint.h> header files. (C99 requires that <inttypes.h>
