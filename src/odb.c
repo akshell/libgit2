@@ -1149,11 +1149,10 @@ void git_odb_close(git_odb *db)
 	free(db);
 }
 
-int git_odb_read(
-	git_obj *out,
-	git_odb *db,
-	const git_oid *id)
+int git_odb_read(git_obj *out, git_odb *db, const git_oid *id)
 {
+	assert(out && db && id);
+
 attempt:
 	if (!git_odb__read_packed(out, db, id))
 		return GIT_SUCCESS;
@@ -1170,8 +1169,6 @@ int git_odb__read_loose(git_obj *out, git_odb *db, const git_oid *id)
 {
 	char file[GIT_PATH_MAX];
 	gitfo_buf obj = GITFO_BUF_INIT;
-
-	assert(out && db && id);
 
 	out->data = NULL;
 	out->len  = 0;
