@@ -1263,13 +1263,16 @@ static int read_packed(git_obj *out, git_pack *p, const git_oid *id)
 
 	if (pack_openidx(p))
 		return GIT_ERROR;
+	if (pack_openpack(p)) {
+		pack_decidx(p);
+		return GIT_ERROR;
+	}
 	res = p->idx_search(&pos, p, id);
 	pack_decidx(p);
+	assert(pos < p->pack_map.len);
 
-	if (!res) {
-		/* TODO unpack object at pos */
-		res = GIT_ERROR;
-	}
+	if (res == GIT_SUCCESS)
+		return inflate_pack_obj(out, p, pos);
 
 	return res;
 }
