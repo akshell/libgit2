@@ -28,6 +28,7 @@
 #include "git/zlib.h"
 #include "fileops.h"
 #include "hash.h"
+#include "delta-apply.h"
 #include "odb.h"
 
 #define GIT_PACK_NAME_MAX (5 + 40 + 1)
@@ -232,7 +233,7 @@ static int is_zlib_compressed_data(unsigned char *data)
 	unsigned int w;
 
 	w = ((unsigned int)(data[0]) << 8) + data[1];
-	return data[0] == 0x78 && !(w %31);
+	return data[0] == 0x78 && !(w % 31);
 }
 
 static size_t get_binary_object_header(obj_hdr *hdr, gitfo_buf *obj)
@@ -1190,6 +1191,72 @@ int git_odb__read_loose(git_obj *out, git_odb *db, const git_oid *id)
 	gitfo_free_buf(&obj);
 
 	return GIT_SUCCESS;
+}
+
+static int inflate_pack_obj(git_obj *out, git_pack *p, off_t offset)
+{
+	obj_hdr hdr;
+	gitfo_buf buf;
+	size_t used;
+	void *data;
+	git_obj base;
+
+	/* Cast the map to a gitfo_buf */
+	buf.data = (unsigned char *)p->pack_map.data + offset;
+	buf.len = p->pack_map.len - offset;
+
+	/*
+	 * Read the object header, which is an (uncompressed)
+	 * binary encoding of the object type and size.
+	 */
+	if (!(used = get_binary_object_header(&hdr, &buf)))
+		return GIT_ERROR;
+
+	/*
+	 * Read the object data as a zlib compressed data
+	 */
+	buf.data += used;
+	buf.len -= used;
+	assert(is_zlib_compressed_data(buf.data));
+
+	if (!(data = git__malloc(hdr.size + 1)))
+		return GIT_ERROR;
+	if (inflate_buffer(buf.data, buf.len, data, hdr.size))
+		goto inflate_fail;
+
+	switch (hdr.type) {
+		case GIT_OBJ_COMMIT:
+		case GIT_OBJ_TREE:
+		case GIT_OBJ_BLOB:
+		case GIT_OBJ_TAG:
+			out->data = data;
+			out->len = hdr.size;
+			out->type = hdr.type;
+			return GIT_SUCCESS;
+		case GIT_OBJ_OFS_DELTA:
+			offset -= hdr.base_offset;
+			if (inflate_pack_obj(&base, p, offset))
+				goto inflate_fail;
+			if (git__delta_apply(out, base.data, base.len, data, hdr.size))
+				goto inflate_fail;
+			out->type = base.type;
+			return GIT_SUCCESS;
+		case GIT_OBJ_REF_DELTA:
+			if (p->idx_search(&offset, p, &hdr.base_name))
+				goto inflate_fail;
+			if (inflate_pack_obj(&base, p, offset))
+				goto inflate_fail;
+			if (git__delta_apply(out, base.data, base.len, data, hdr.size))
+				goto inflate_fail;
+			out->type = base.type;
+			return GIT_SUCCESS;
+		default:
+			goto inflate_fail;
+	}
+
+inflate_fail:
+	free(data);
+	return GIT_ERROR;
 }
 
 static int read_packed(git_obj *out, git_pack *p, const git_oid *id)
