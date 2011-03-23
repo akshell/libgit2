@@ -1269,12 +1269,12 @@ static int read_packed(git_obj *out, git_pack *p, const git_oid *id)
 	}
 	res = p->idx_search(&pos, p, id);
 	pack_decidx(p);
+
+	if (res != GIT_SUCCESS)
+		return res;
+
 	assert(pos < p->pack_map.len);
-
-	if (res == GIT_SUCCESS)
-		return inflate_pack_obj(out, p, pos);
-
-	return res;
+	return inflate_pack_obj(out, p, pos);
 }
 
 int git_odb__read_packed(git_obj *out, git_odb *db, const git_oid *id)
